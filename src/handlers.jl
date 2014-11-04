@@ -19,7 +19,8 @@ function complete_request(socket, msg)
                                                      line[positions])))
 end
 
-function kernel_info_request(socket, msg)
+function kernel_info_request(socket, msg::Message)
+    println(orig_STDERR, msg)
     send_ipython(requests,
                  msg_reply(msg, "kernel_info_reply",
                            @compat Dict("protocol_version" => [4, 0],
@@ -28,6 +29,24 @@ function kernel_info_request(socket, msg)
                                                                VERSION.patch],
                                         "language" => "julia")))
 end
+
+
+function kernel_info_request(socket, msg::MsgV5)
+    println(orig_STDERR, msg)
+    rep = msg_reply(msg, "kernel_info_reply",
+        @compat Dict("protocol_version" => "4.0.0",
+                     "implementation_version" => join([VERSION.major,
+                                                       VERSION.minor,
+                                                       VERSION.patch], "."),
+                     "language_version"=> "0.4.0",
+                     "implementation"  => "IJulia",
+                     "language"        => "julia",
+                     "banner"          => "Welcome to IJulia !"
+                     )
+        ) 
+    send_ipython(requests,rep)
+end
+
 
 function connect_request(socket, msg)
     send_ipython(requests,

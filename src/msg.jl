@@ -1,9 +1,12 @@
 import Base.show
 
-export Msg, msg_pub, msg_reply, send_status, send_ipython
+export Msg, msg_pub, msg_reply, send_status, send_ipython, Message, MsgV5
 
 # IPython message structure
-type Msg
+
+abstract Message
+
+type Msg <: Message
     idents::Vector{String}
     header::Dict
     content::Dict
@@ -15,12 +18,25 @@ type Msg
     end
 end
 
+type MsgV5 <: Message
+    idents::Vector{String}
+    header::Dict
+    content::Dict
+    parent_header::Dict
+    metadata::Dict
+    function MsgV5(idents, header::Dict, content::Dict,
+                 parent_header=Dict{String,Any}(), metadata=Dict{String,Any}())
+        new(idents,header,content,parent_header,metadata)
+    end
+end
+
+
 # PUB/broadcast messages use the msg_type as the ident, except for
 # stream messages which use the stream name (e.g. "stdout").
 # [According to minrk, "this isn't well defined, or even really part
 # of the spec yet" and is in practice currently ignored since "all
 # subscribers currently subscribe to all topics".]
-msg_pub(m::Msg, msg_type, content, metadata=Dict{String,Any}()) =
+msg_pub(m::Message, msg_type, content, metadata=Dict{String,Any}()) =
   Msg([ msg_type == "stream" ? content["name"] : msg_type ], 
       @compat(Dict("msg_id" => uuid4(),
                    "username" => m.header["username"],
@@ -28,7 +44,16 @@ msg_pub(m::Msg, msg_type, content, metadata=Dict{String,Any}()) =
                    "msg_type" => msg_type)),
       content, m.header, metadata)
 
-msg_reply(m::Msg, msg_type, content, metadata=Dict{String,Any}()) =
+msg_pub(m::MsgV5, msg_type, content, metadata=Dict{String,Any}()) =
+  Msg([ msg_type == "stream" ? content["name"] : msg_type ], 
+      @compat(Dict("msg_id" => uuid4(),
+                   "username" => m.header["username"],
+                   "session" => m.header["session"],
+                   "msg_type" => msg_type,
+                   "version" => "5.0")),
+      content, m.header, metadata)
+
+msg_reply(m::Message, msg_type, content, metadata=Dict{String,Any}()) =
   Msg(m.idents, 
       @compat(Dict("msg_id" => uuid4(),
                    "username" => m.header["username"],
@@ -36,13 +61,25 @@ msg_reply(m::Msg, msg_type, content, metadata=Dict{String,Any}()) =
                    "msg_type" => msg_type)),
       content, m.header, metadata)
 
-function show(io::IO, msg::Msg)
+
+msg_reply(m::MsgV5, msg_type, content, metadata=Dict{String,Any}()) =
+  MsgV5(m.idents, 
+      @compat(Dict("msg_id" => uuid4(),
+                   "username" => m.header["username"],
+                   "session" => m.header["session"],
+                   "msg_type" => msg_type,
+                   "version" => "5.0")),
+      content, m.header, metadata)
+
+
+
+function show(io::IO, msg::Message)
     print(io, "IPython Msg [ idents ")
     print_joined(io, msg.idents, ", ")
     print(io, " ] {\n  header = $(msg.header),\n  metadata = $(msg.metadata),\n  content = $(msg.content)\n}")
 end
 
-function send_ipython(socket, m::Msg)
+function send_ipython(socket, m::Message)
     @vprintln("SENDING $m")
     for i in m.idents
         send(socket, i, SNDMORE)
@@ -79,7 +116,14 @@ function recv_ipython(socket)
     if signature != hmac(header, parent_header, metadata, content)
         error("Invalid HMAC signature") # What should we do here?
     end
-    m = Msg(idents, JSON.parse(header), JSON.parse(content), JSON.parse(parent_header), JSON.parse(metadata))
+    h = JSON.parse(header)
+    version = get(h,"version","4.0")
+    if version == "4.0"
+        m = Msg(idents, h, JSON.parse(content), JSON.parse(parent_header), JSON.parse(metadata))
+    elseif version == "5.0"
+        m = MsgV5(idents, h, JSON.parse(content), JSON.parse(parent_header), JSON.parse(metadata))
+    end
+        
     @vprintln("RECEIVED $m")
     return m
 end
